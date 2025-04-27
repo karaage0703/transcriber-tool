@@ -19,18 +19,15 @@
 ### インストール手順
 
 ```bash
-# リポジトリをクローン
-git clone https://github.com/karaage0703/transcriber_tool.git
-cd transcriber_tool
-
-# uvを使ってインストール
-uv pip install -e .
+uv tool install transcriber_tool
 ```
 
-または、直接インストールする場合：
+もしくは以下のようにuvxコマンドを使えばそのまま実行可能
 
 ```bash
-uv pip install git+https://github.com/karaage070/transcriber_tool.git
+uvx transcriber_tool
+or
+uv tool run transcriber_tool
 ```
 
 ## 使い方
@@ -76,16 +73,6 @@ Options:
 | small      | 中         | 中       | 中   |
 | medium     | 高         | 遅い     | 高   |
 | large      | 最高       | 最遅     | 最高 |
-
-## 開発
-
-```bash
-# 開発用インストール
-uv pip install -e ".[dev]"
-
-# テスト実行
-pytest
-```
 
 ## ライセンス
 
