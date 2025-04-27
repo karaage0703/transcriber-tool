@@ -1,0 +1,17 @@
+[project]
+name = "transcriber_tool"
+version = "0.1.0"
+description = "音声ファイルをテキストに変換するCLIツール"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "faster-whisper",
+    "click",
+]
+
+[project.scripts]
+transcriber_tool = "transcriber_tool.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
