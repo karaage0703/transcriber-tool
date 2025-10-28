@@ -24,16 +24,18 @@ class Transcriber:
     faster-whisperを使用して音声・動画ファイルの文字起こしを行うクラス
     """
 
-    def __init__(self, model_size: str = "base", output_dir: Optional[str] = None):
+    def __init__(self, model_size: str = "base", output_dir: Optional[str] = None, device: str = "cpu"):
         """
         Transcriberのコンストラクタ
 
         Args:
             model_size: 使用するモデルサイズ ("tiny", "base", "small", "medium", "large")
             output_dir: 文字起こし結果の出力ディレクトリ（指定がない場合は一時ディレクトリを使用）
+            device: 使用するデバイス ("cpu", "cuda", "auto")
         """
         self.model = None
         self.model_size = model_size
+        self.device = device
         self.logger = logging.getLogger(__name__)
         self.output_dir = output_dir or os.path.join(os.getcwd(), "output")
 
@@ -46,8 +48,8 @@ class Transcriber:
             try:
                 import faster_whisper
 
-                self.logger.info(f"faster-whisperモデル '{self.model_size}' をロード中...")
-                self.model = faster_whisper.WhisperModel(self.model_size, device="cpu")
+                self.logger.info(f"faster-whisperモデル '{self.model_size}' をデバイス '{self.device}' でロード中...")
+                self.model = faster_whisper.WhisperModel(self.model_size, device=self.device)
                 self.logger.info("モデルのロードが完了しました")
             except ImportError:
                 self.logger.error("faster-whisperがインストールされていません")
@@ -157,10 +159,16 @@ def cli():
     type=click.Path(),
     help="出力ディレクトリ（指定がない場合はカレントディレクトリの下にoutputディレクトリを作成）",
 )
-def transcribe(file_path: str, output: Optional[str], model_size: str, output_dir: Optional[str]):
+@click.option(
+    "--device",
+    type=click.Choice(["cpu", "cuda", "auto"]),
+    default="cpu",
+    help="使用するデバイス (デフォルト: cpu)",
+)
+def transcribe(file_path: str, output: Optional[str], model_size: str, output_dir: Optional[str], device: str):
     """音声ファイルを文字起こしする"""
     try:
-        transcriber = Transcriber(model_size=model_size, output_dir=output_dir)
+        transcriber = Transcriber(model_size=model_size, output_dir=output_dir, device=device)
         output_path = transcriber.transcribe(file_path, output)
         click.echo(f"文字起こしが完了しました: {output_path}")
     except Exception as e:
