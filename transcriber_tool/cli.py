@@ -8,7 +8,39 @@ import os
 import sys
 import logging
 import click
-from typing import Optional
+from typing import Optional, List, Tuple
+
+
+def format_timestamp(seconds: float) -> str:
+    """
+    秒数をHH:MM:SS,mmm形式に変換する
+
+    Args:
+        seconds: 秒数
+
+    Returns:
+        フォーマットされたタイムスタンプ文字列
+    """
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    msecs = int((seconds - int(seconds)) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{msecs:03d}"
+
+
+def format_timestamp_simple(seconds: float) -> str:
+    """
+    秒数をMM:SS形式に変換する（短い音声用）
+
+    Args:
+        seconds: 秒数
+
+    Returns:
+        フォーマットされたタイムスタンプ文字列
+    """
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes:02d}:{secs:02d}"
 
 # ロガーの設定
 logging.basicConfig(
@@ -82,13 +114,21 @@ class Transcriber:
 
         return True
 
-    def transcribe(self, file_path: str, output_path: Optional[str] = None) -> str:
+    def transcribe(
+        self,
+        file_path: str,
+        output_path: Optional[str] = None,
+        output_format: str = "txt",
+        timestamps: bool = False,
+    ) -> str:
         """
         音声・動画ファイルを文字起こしし、結果をファイルに保存する
 
         Args:
             file_path: 文字起こし対象のファイルパス
             output_path: 出力先のファイルパス（指定がない場合は自動生成）
+            output_format: 出力形式 ("txt", "srt", "vtt", "tsv")
+            timestamps: タイムスタンプを含めるか（txt形式の場合のみ有効）
 
         Returns:
             文字起こし結果のファイルパス
@@ -106,8 +146,25 @@ class Transcriber:
             # faster-whisperでの文字起こし処理
             segments, info = self.model.transcribe(file_path)
 
-            # 結果をテキストとして結合
-            transcript = " ".join([segment.text for segment in segments])
+            # セグメントをリストに変換（ジェネレータは一度しか使えないため）
+            segment_list = list(segments)
+
+            # 出力形式に応じて結果を生成
+            if output_format == "srt":
+                transcript = self._format_srt(segment_list)
+                ext = ".srt"
+            elif output_format == "vtt":
+                transcript = self._format_vtt(segment_list)
+                ext = ".vtt"
+            elif output_format == "tsv":
+                transcript = self._format_tsv(segment_list)
+                ext = ".tsv"
+            elif timestamps:
+                transcript = self._format_timestamps(segment_list)
+                ext = ".txt"
+            else:
+                transcript = " ".join([segment.text for segment in segment_list])
+                ext = ".txt"
 
             self.logger.info(f"文字起こしが完了しました: {len(transcript)} 文字")
 
@@ -115,7 +172,7 @@ class Transcriber:
             if output_path is None:
                 # 出力ファイルパスの自動生成
                 input_filename = os.path.basename(file_path)
-                output_filename = f"{os.path.splitext(input_filename)[0]}_transcribed.txt"
+                output_filename = f"{os.path.splitext(input_filename)[0]}_transcribed{ext}"
                 output_path = os.path.join(self.output_dir, output_filename)
             else:
                 # 出力ディレクトリの作成
@@ -134,6 +191,47 @@ class Transcriber:
         except Exception as e:
             self.logger.error(f"文字起こし中にエラーが発生しました: {str(e)}")
             raise
+
+    def _format_timestamps(self, segments: list) -> str:
+        """タイムスタンプ付きテキスト形式でフォーマット"""
+        lines = []
+        for segment in segments:
+            start = format_timestamp_simple(segment.start)
+            lines.append(f"[{start}] {segment.text.strip()}")
+        return "\n".join(lines)
+
+    def _format_srt(self, segments: list) -> str:
+        """SRT形式でフォーマット"""
+        lines = []
+        for i, segment in enumerate(segments, 1):
+            start = format_timestamp(segment.start)
+            end = format_timestamp(segment.end)
+            lines.append(f"{i}")
+            lines.append(f"{start} --> {end}".replace(",", ","))
+            lines.append(segment.text.strip())
+            lines.append("")
+        return "\n".join(lines)
+
+    def _format_vtt(self, segments: list) -> str:
+        """VTT形式でフォーマット"""
+        lines = ["WEBVTT", ""]
+        for segment in segments:
+            start = format_timestamp(segment.start).replace(",", ".")
+            end = format_timestamp(segment.end).replace(",", ".")
+            lines.append(f"{start} --> {end}")
+            lines.append(segment.text.strip())
+            lines.append("")
+        return "\n".join(lines)
+
+    def _format_tsv(self, segments: list) -> str:
+        """TSV形式でフォーマット（タイムスタンプ分析用）"""
+        lines = ["start\tend\ttext"]
+        for segment in segments:
+            start = format_timestamp_simple(segment.start)
+            end = format_timestamp_simple(segment.end)
+            text = segment.text.strip().replace("\t", " ")
+            lines.append(f"{start}\t{end}\t{text}")
+        return "\n".join(lines)
 
 
 @click.group()
@@ -165,11 +263,38 @@ def cli():
     default="cpu",
     help="使用するデバイス (デフォルト: cpu)",
 )
-def transcribe(file_path: str, output: Optional[str], model_size: str, output_dir: Optional[str], device: str):
+@click.option(
+    "--format",
+    "-f",
+    "output_format",
+    type=click.Choice(["txt", "srt", "vtt", "tsv"]),
+    default="txt",
+    help="出力形式 (デフォルト: txt, srt/vttは字幕形式, tsvはタイムスタンプ分析用)",
+)
+@click.option(
+    "--timestamps",
+    "-t",
+    is_flag=True,
+    help="タイムスタンプを含める（txt形式の場合のみ有効）",
+)
+def transcribe(
+    file_path: str,
+    output: Optional[str],
+    model_size: str,
+    output_dir: Optional[str],
+    device: str,
+    output_format: str,
+    timestamps: bool,
+):
     """音声ファイルを文字起こしする"""
     try:
         transcriber = Transcriber(model_size=model_size, output_dir=output_dir, device=device)
-        output_path = transcriber.transcribe(file_path, output)
+        output_path = transcriber.transcribe(
+            file_path,
+            output,
+            output_format=output_format,
+            timestamps=timestamps,
+        )
         click.echo(f"文字起こしが完了しました: {output_path}")
     except Exception as e:
         click.echo(f"エラー: {str(e)}", err=True)
