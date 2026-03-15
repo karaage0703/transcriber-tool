@@ -42,7 +42,7 @@ uv tool install "transcriber_tool[gpu]"
 PyTorchのCUDA対応版が必要な場合は、`--extra-index-url` を指定してインストールしてください：
 
 ```bash
-uv tool install "transcriber_tool[gpu]" --extra-index-url https://download.pytorch.org/whl/cu128
+uv tool install "transcriber_tool[gpu]" --extra-index-url https://download.pytorch.org/whl/cu130
 ```
 
 ## 使い方
