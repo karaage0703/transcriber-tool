@@ -62,10 +62,21 @@ def _detect_device(requested_device: str) -> tuple[str, str]:
         return "cpu", "faster-whisper"
 
     # cuda or auto: GPUが使えるか確認
+    # 1. まずctranslate2のCUDA対応を確認（x86_64ではPyPIビルドがCUDA対応）
+    try:
+        import ctranslate2
+        cuda_types = ctranslate2.get_supported_compute_types("cuda")
+        if cuda_types:
+            logger.info("faster-whisper (ctranslate2) のCUDAサポートを検出")
+            return "cuda", "faster-whisper"
+    except (ImportError, ValueError):
+        pass
+
+    # 2. ctranslate2がCUDA非対応 → PyTorch (openai-whisper) にフォールバック
     try:
         import torch
         if torch.cuda.is_available():
-            logger.info(f"GPU検出: {torch.cuda.get_device_name(0)}")
+            logger.info(f"GPU検出: {torch.cuda.get_device_name(0)}（openai-whisperバックエンドを使用）")
             return "cuda", "openai-whisper"
         elif requested_device == "cuda":
             logger.warning("CUDAが利用できません。CPUにフォールバックします")
@@ -75,14 +86,17 @@ def _detect_device(requested_device: str) -> tuple[str, str]:
             return "cpu", "faster-whisper"
     except ImportError:
         if requested_device == "cuda":
-            logger.warning("PyTorchがインストールされていません。GPU利用にはpip install transcriber_tool[gpu]が必要です。CPUにフォールバックします")
+            logger.warning("GPU利用にはctranslate2のCUDAビルド、またはpip install transcriber_tool[gpu]が必要です。CPUにフォールバックします")
         return "cpu", "faster-whisper"
 
 
 class Transcriber:
     """
     音声・動画ファイルの文字起こしを行うクラス。
-    CPUではfaster-whisper (ctranslate2)、GPUではopenai-whisper (PyTorch) を使用。
+    バックエンドは環境に応じて自動選択:
+    - ctranslate2がCUDA対応 → faster-whisper (GPU)
+    - ctranslate2がCPU版のみ → openai-whisper (PyTorch GPU) にフォールバック
+    - GPU未使用時 → faster-whisper (CPU)
     """
 
     def __init__(self, model_size: str = "base", output_dir: Optional[str] = None, device: str = "cpu"):

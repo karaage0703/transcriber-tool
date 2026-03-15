@@ -69,10 +69,10 @@ transcriber_tool transcribe audio.mp3 --output-dir ./results
 # 自動選択（デフォルト: GPUがあればGPU、なければCPU）
 transcriber_tool transcribe audio.mp3 --device auto
 
-# CPU強制（faster-whisperバックエンド）
+# CPU強制
 transcriber_tool transcribe audio.mp3 --device cpu
 
-# GPU強制（openai-whisperバックエンド）
+# GPU強制
 transcriber_tool transcribe audio.mp3 --device cuda
 ```
 
@@ -114,11 +114,17 @@ Options:
 
 ## バックエンド
 
-| デバイス | バックエンド | 説明 |
-|---------|------------|------|
-| cpu | faster-whisper (ctranslate2) | CPU最適化、高速 |
-| cuda | openai-whisper (PyTorch) | GPU対応、大規模モデルに最適 |
-| auto | 自動選択 | GPUが利用可能ならcuda、なければcpu |
+`--device cuda` または `auto` 指定時、環境に応じてバックエンドを自動選択します：
+
+1. **ctranslate2がCUDA対応** → faster-whisper (GPU)（x86_64環境）
+2. **ctranslate2がCPU版のみ** → openai-whisper / PyTorch (GPU) にフォールバック（aarch64環境等）
+3. **GPU未検出** → faster-whisper (CPU)
+
+| デバイス | 動作 |
+|---------|------|
+| cpu | faster-whisper (CPU) を使用 |
+| cuda | GPU利用。バックエンドは環境に応じて自動選択 |
+| auto (デフォルト) | GPUがあればcuda、なければcpu |
 
 ## モデルサイズと性能
 
