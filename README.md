@@ -5,7 +5,8 @@
 ## 特徴
 
 - 複数の音声・動画形式に対応（MP3, MP4, WAV, MOV, AVI）
-- [faster-whisper](https://github.com/guillaumekln/faster-whisper)を使用した高速な文字起こし
+- [faster-whisper](https://github.com/guillaumekln/faster-whisper)を使用した高速な文字起こし（CPU）
+- [openai-whisper](https://github.com/openai/whisper)によるGPUアクセラレーション対応
 - 複数のモデルサイズに対応（tiny, base, small, medium, large）
 - シンプルで使いやすいコマンドラインインターフェース
 
@@ -30,12 +31,26 @@ or
 uv tool run transcriber_tool
 ```
 
+### GPU対応（オプション）
+
+NVIDIA GPU環境でCUDAアクセラレーションを使う場合：
+
+```bash
+uv tool install "transcriber_tool[gpu]"
+```
+
+PyTorchのCUDA対応版が必要な場合は、`--extra-index-url` を指定してインストールしてください：
+
+```bash
+uv tool install "transcriber_tool[gpu]" --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
 ## 使い方
 
 ### 基本的な使い方
 
 ```bash
-# 基本的な文字起こし
+# 基本的な文字起こし（GPUがあれば自動で使用）
 transcriber_tool transcribe audio.mp3
 
 # 出力先を指定
@@ -46,6 +61,19 @@ transcriber_tool transcribe audio.mp3 --model-size medium
 
 # 出力ディレクトリを指定
 transcriber_tool transcribe audio.mp3 --output-dir ./results
+```
+
+### デバイス指定
+
+```bash
+# 自動選択（デフォルト: GPUがあればGPU、なければCPU）
+transcriber_tool transcribe audio.mp3 --device auto
+
+# CPU強制
+transcriber_tool transcribe audio.mp3 --device cpu
+
+# GPU強制
+transcriber_tool transcribe audio.mp3 --device cuda
 ```
 
 ### タイムスタンプ付き出力
@@ -80,9 +108,23 @@ Options:
   -f, --format [txt|srt|vtt|tsv]
                             出力形式 (デフォルト: txt)
   -t, --timestamps          タイムスタンプを含める（txt形式の場合のみ有効）
-  --device [cpu|cuda|auto]  使用するデバイス (デフォルト: cpu)
+  --device [cpu|cuda|auto]  使用するデバイス (デフォルト: auto)
   --help                    ヘルプメッセージを表示
 ```
+
+## バックエンド
+
+`--device cuda` または `auto` 指定時、環境に応じてバックエンドを自動選択します：
+
+1. **ctranslate2がCUDA対応** → faster-whisper (GPU)（x86_64環境）
+2. **ctranslate2がCPU版のみ** → openai-whisper / PyTorch (GPU) にフォールバック（aarch64環境等）
+3. **GPU未検出** → faster-whisper (CPU)
+
+| デバイス | 動作 |
+|---------|------|
+| cpu | faster-whisper (CPU) を使用 |
+| cuda | GPU利用。バックエンドは環境に応じて自動選択 |
+| auto (デフォルト) | GPUがあればcuda、なければcpu |
 
 ## モデルサイズと性能
 

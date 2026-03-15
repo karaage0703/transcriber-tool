@@ -51,9 +51,52 @@ logging.basicConfig(
 logger = logging.getLogger("transcriber_tool")
 
 
+def _detect_device(requested_device: str) -> tuple[str, str]:
+    """
+    リクエストされたデバイスに応じて実際のデバイスとバックエンドを決定する
+
+    Returns:
+        (device, backend) のタプル。backend は "faster-whisper" or "openai-whisper"
+    """
+    if requested_device == "cpu":
+        return "cpu", "faster-whisper"
+
+    # cuda or auto: GPUが使えるか確認
+    # 1. まずctranslate2のCUDA対応を確認（x86_64ではPyPIビルドがCUDA対応）
+    try:
+        import ctranslate2
+        cuda_types = ctranslate2.get_supported_compute_types("cuda")
+        if cuda_types:
+            logger.info("faster-whisper (ctranslate2) のCUDAサポートを検出")
+            return "cuda", "faster-whisper"
+    except (ImportError, ValueError):
+        pass
+
+    # 2. ctranslate2がCUDA非対応 → PyTorch (openai-whisper) にフォールバック
+    try:
+        import torch
+        if torch.cuda.is_available():
+            logger.info(f"GPU検出: {torch.cuda.get_device_name(0)}（openai-whisperバックエンドを使用）")
+            return "cuda", "openai-whisper"
+        elif requested_device == "cuda":
+            logger.warning("CUDAが利用できません。CPUにフォールバックします")
+            return "cpu", "faster-whisper"
+        else:
+            # auto でGPUなし
+            return "cpu", "faster-whisper"
+    except ImportError:
+        if requested_device == "cuda":
+            logger.warning("GPU利用にはctranslate2のCUDAビルド、またはpip install transcriber_tool[gpu]が必要です。CPUにフォールバックします")
+        return "cpu", "faster-whisper"
+
+
 class Transcriber:
     """
-    faster-whisperを使用して音声・動画ファイルの文字起こしを行うクラス
+    音声・動画ファイルの文字起こしを行うクラス。
+    バックエンドは環境に応じて自動選択:
+    - ctranslate2がCUDA対応 → faster-whisper (GPU)
+    - ctranslate2がCPU版のみ → openai-whisper (PyTorch GPU) にフォールバック
+    - GPU未使用時 → faster-whisper (CPU)
     """
 
     def __init__(self, model_size: str = "base", output_dir: Optional[str] = None, device: str = "cpu"):
@@ -67,27 +110,53 @@ class Transcriber:
         """
         self.model = None
         self.model_size = model_size
-        self.device = device
         self.logger = logging.getLogger(__name__)
         self.output_dir = output_dir or os.path.join(os.getcwd(), "output")
+
+        # デバイスとバックエンドの決定
+        self.device, self.backend = _detect_device(device)
+        self.logger.info(f"バックエンド: {self.backend}, デバイス: {self.device}")
 
         # 出力ディレクトリの作成
         os.makedirs(self.output_dir, exist_ok=True)
 
     def _load_model(self):
         """モデルを遅延ロードする"""
-        if self.model is None:
-            try:
-                import faster_whisper
+        if self.model is not None:
+            return
 
-                self.logger.info(f"faster-whisperモデル '{self.model_size}' をデバイス '{self.device}' でロード中...")
-                self.model = faster_whisper.WhisperModel(self.model_size, device=self.device)
-                self.logger.info("モデルのロードが完了しました")
-            except ImportError:
-                self.logger.error("faster-whisperがインストールされていません")
-                raise ImportError(
-                    "faster-whisperがインストールされていません。'pip install faster-whisper'を実行してください。"
-                )
+        if self.backend == "openai-whisper":
+            self._load_openai_whisper()
+        else:
+            self._load_faster_whisper()
+
+    def _load_faster_whisper(self):
+        """faster-whisperモデルをロードする（CPU用）"""
+        try:
+            import faster_whisper
+
+            self.logger.info(f"faster-whisperモデル '{self.model_size}' をデバイス '{self.device}' でロード中...")
+            self.model = faster_whisper.WhisperModel(self.model_size, device=self.device)
+            self.logger.info("モデルのロードが完了しました")
+        except ImportError:
+            self.logger.error("faster-whisperがインストールされていません")
+            raise ImportError(
+                "faster-whisperがインストールされていません。'pip install faster-whisper'を実行してください。"
+            )
+
+    def _load_openai_whisper(self):
+        """openai-whisperモデルをロードする（GPU用）"""
+        try:
+            import whisper
+
+            self.logger.info(f"openai-whisperモデル '{self.model_size}' をデバイス '{self.device}' でロード中...")
+            self.model = whisper.load_model(self.model_size, device=self.device)
+            self.logger.info("モデルのロードが完了しました")
+        except ImportError:
+            self.logger.error("openai-whisperがインストールされていません")
+            raise ImportError(
+                "openai-whisperがインストールされていません。'pip install transcriber_tool[gpu]'を実行してください。"
+            )
 
     def _validate_file(self, file_path: str) -> bool:
         """
@@ -143,11 +212,11 @@ class Transcriber:
         self.logger.info(f"ファイル '{file_path}' の文字起こしを開始します")
 
         try:
-            # faster-whisperでの文字起こし処理
-            segments, info = self.model.transcribe(file_path)
-
-            # セグメントをリストに変換（ジェネレータは一度しか使えないため）
-            segment_list = list(segments)
+            # バックエンドに応じた文字起こし処理
+            if self.backend == "openai-whisper":
+                segment_list = self._transcribe_openai_whisper(file_path)
+            else:
+                segment_list = self._transcribe_faster_whisper(file_path)
 
             # 出力形式に応じて結果を生成
             if output_format == "srt":
@@ -163,7 +232,7 @@ class Transcriber:
                 transcript = self._format_timestamps(segment_list)
                 ext = ".txt"
             else:
-                transcript = " ".join([segment.text for segment in segment_list])
+                transcript = " ".join([seg["text"] for seg in segment_list])
                 ext = ".txt"
 
             self.logger.info(f"文字起こしが完了しました: {len(transcript)} 文字")
@@ -192,44 +261,60 @@ class Transcriber:
             self.logger.error(f"文字起こし中にエラーが発生しました: {str(e)}")
             raise
 
-    def _format_timestamps(self, segments: list) -> str:
+    def _transcribe_faster_whisper(self, file_path: str) -> list[dict]:
+        """faster-whisperで文字起こしし、統一形式のセグメントリストを返す"""
+        segments, info = self.model.transcribe(file_path)
+        return [
+            {"start": seg.start, "end": seg.end, "text": seg.text}
+            for seg in segments
+        ]
+
+    def _transcribe_openai_whisper(self, file_path: str) -> list[dict]:
+        """openai-whisperで文字起こしし、統一形式のセグメントリストを返す"""
+        result = self.model.transcribe(file_path)
+        return [
+            {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
+            for seg in result["segments"]
+        ]
+
+    def _format_timestamps(self, segments: list[dict]) -> str:
         """タイムスタンプ付きテキスト形式でフォーマット"""
         lines = []
-        for segment in segments:
-            start = format_timestamp_simple(segment.start)
-            lines.append(f"[{start}] {segment.text.strip()}")
+        for seg in segments:
+            start = format_timestamp_simple(seg["start"])
+            lines.append(f"[{start}] {seg['text'].strip()}")
         return "\n".join(lines)
 
-    def _format_srt(self, segments: list) -> str:
+    def _format_srt(self, segments: list[dict]) -> str:
         """SRT形式でフォーマット"""
         lines = []
-        for i, segment in enumerate(segments, 1):
-            start = format_timestamp(segment.start)
-            end = format_timestamp(segment.end)
+        for i, seg in enumerate(segments, 1):
+            start = format_timestamp(seg["start"])
+            end = format_timestamp(seg["end"])
             lines.append(f"{i}")
             lines.append(f"{start} --> {end}".replace(",", ","))
-            lines.append(segment.text.strip())
+            lines.append(seg["text"].strip())
             lines.append("")
         return "\n".join(lines)
 
-    def _format_vtt(self, segments: list) -> str:
+    def _format_vtt(self, segments: list[dict]) -> str:
         """VTT形式でフォーマット"""
         lines = ["WEBVTT", ""]
-        for segment in segments:
-            start = format_timestamp(segment.start).replace(",", ".")
-            end = format_timestamp(segment.end).replace(",", ".")
+        for seg in segments:
+            start = format_timestamp(seg["start"]).replace(",", ".")
+            end = format_timestamp(seg["end"]).replace(",", ".")
             lines.append(f"{start} --> {end}")
-            lines.append(segment.text.strip())
+            lines.append(seg["text"].strip())
             lines.append("")
         return "\n".join(lines)
 
-    def _format_tsv(self, segments: list) -> str:
+    def _format_tsv(self, segments: list[dict]) -> str:
         """TSV形式でフォーマット（タイムスタンプ分析用）"""
         lines = ["start\tend\ttext"]
-        for segment in segments:
-            start = format_timestamp_simple(segment.start)
-            end = format_timestamp_simple(segment.end)
-            text = segment.text.strip().replace("\t", " ")
+        for seg in segments:
+            start = format_timestamp_simple(seg["start"])
+            end = format_timestamp_simple(seg["end"])
+            text = seg["text"].strip().replace("\t", " ")
             lines.append(f"{start}\t{end}\t{text}")
         return "\n".join(lines)
 
@@ -260,8 +345,8 @@ def cli():
 @click.option(
     "--device",
     type=click.Choice(["cpu", "cuda", "auto"]),
-    default="cpu",
-    help="使用するデバイス (デフォルト: cpu)",
+    default="auto",
+    help="使用するデバイス (デフォルト: auto)",
 )
 @click.option(
     "--format",
