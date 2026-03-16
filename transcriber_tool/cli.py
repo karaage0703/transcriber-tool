@@ -189,6 +189,8 @@ class Transcriber:
         output_path: Optional[str] = None,
         output_format: str = "txt",
         timestamps: bool = False,
+        verbose: bool = False,
+        language: Optional[str] = None,
     ) -> str:
         """
         音声・動画ファイルを文字起こしし、結果をファイルに保存する
@@ -198,6 +200,8 @@ class Transcriber:
             output_path: 出力先のファイルパス（指定がない場合は自動生成）
             output_format: 出力形式 ("txt", "srt", "vtt", "tsv")
             timestamps: タイムスタンプを含めるか（txt形式の場合のみ有効）
+            verbose: 進捗ログを表示するか（openai-whisperバックエンド時のみ有効）
+            language: 言語コード（例: "ja", "en"）。指定しない場合は自動検出
 
         Returns:
             文字起こし結果のファイルパス
@@ -214,9 +218,9 @@ class Transcriber:
         try:
             # バックエンドに応じた文字起こし処理
             if self.backend == "openai-whisper":
-                segment_list = self._transcribe_openai_whisper(file_path)
+                segment_list = self._transcribe_openai_whisper(file_path, verbose=verbose, language=language)
             else:
-                segment_list = self._transcribe_faster_whisper(file_path)
+                segment_list = self._transcribe_faster_whisper(file_path, language=language)
 
             # 出力形式に応じて結果を生成
             if output_format == "srt":
@@ -261,17 +265,23 @@ class Transcriber:
             self.logger.error(f"文字起こし中にエラーが発生しました: {str(e)}")
             raise
 
-    def _transcribe_faster_whisper(self, file_path: str) -> list[dict]:
+    def _transcribe_faster_whisper(self, file_path: str, language: Optional[str] = None) -> list[dict]:
         """faster-whisperで文字起こしし、統一形式のセグメントリストを返す"""
-        segments, info = self.model.transcribe(file_path)
+        kwargs = {}
+        if language:
+            kwargs["language"] = language
+        segments, info = self.model.transcribe(file_path, **kwargs)
         return [
             {"start": seg.start, "end": seg.end, "text": seg.text}
             for seg in segments
         ]
 
-    def _transcribe_openai_whisper(self, file_path: str) -> list[dict]:
+    def _transcribe_openai_whisper(self, file_path: str, verbose: bool = False, language: Optional[str] = None) -> list[dict]:
         """openai-whisperで文字起こしし、統一形式のセグメントリストを返す"""
-        result = self.model.transcribe(file_path)
+        kwargs = {"verbose": verbose}
+        if language:
+            kwargs["language"] = language
+        result = self.model.transcribe(file_path, **kwargs)
         return [
             {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
             for seg in result["segments"]
@@ -362,6 +372,19 @@ def cli():
     is_flag=True,
     help="タイムスタンプを含める（txt形式の場合のみ有効）",
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="文字起こしの進捗ログを表示する（openai-whisperバックエンド時にセグメント単位の進捗を出力）",
+)
+@click.option(
+    "--language",
+    "-l",
+    type=str,
+    default=None,
+    help="言語コード（例: ja, en）。指定しない場合は自動検出。日本語音声には --language ja を推奨",
+)
 def transcribe(
     file_path: str,
     output: Optional[str],
@@ -370,6 +393,8 @@ def transcribe(
     device: str,
     output_format: str,
     timestamps: bool,
+    verbose: bool,
+    language: Optional[str],
 ):
     """音声ファイルを文字起こしする"""
     try:
@@ -379,6 +404,8 @@ def transcribe(
             output,
             output_format=output_format,
             timestamps=timestamps,
+            verbose=verbose,
+            language=language,
         )
         click.echo(f"文字起こしが完了しました: {output_path}")
     except Exception as e:
