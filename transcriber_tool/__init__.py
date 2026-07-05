@@ -2,4 +2,4 @@
 transcriber_tool - 音声ファイルをテキストに変換するCLIツール
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
