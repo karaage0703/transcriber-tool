@@ -146,6 +146,8 @@ Options:
 2. **ctranslate2がCPU版のみ** → openai-whisper / PyTorch (GPU) にフォールバック（aarch64環境等）
 3. **GPU未検出** → faster-whisper (CPU)
 
+DGX Spark / NVIDIA GB10 などで PyTorch が既知の CUDA capability warning を出す場合がありますが、この警告は文字起こしの成否を示すものではありません。`transcriber_tool` はこの既知 warning だけを抑止し、CUDA OOM や Traceback などの実エラーは表示します。
+
 | デバイス | 動作 |
 |---------|------|
 | cpu | faster-whisper (CPU) を使用 |

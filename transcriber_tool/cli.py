@@ -7,8 +7,25 @@ transcriber_tool CLI
 import os
 import sys
 import logging
+import warnings
 import click
 from typing import Optional, List, Tuple
+
+
+def _ignore_known_cuda_capability_warnings() -> None:
+    """Suppress known non-fatal NVIDIA GB10 / PyTorch capability warnings only."""
+    patterns = [
+        r"[\s\S]*NVIDIA GB10[\s\S]*CUDA capability[\s\S]*",
+        r"[\s\S]*NVIDIA GB10[\s\S]*cuda capability[\s\S]*",
+        r"[\s\S]*CUDA capability sm_121 is not compatible[\s\S]*",
+        r"[\s\S]*Minimum and Maximum cuda capability supported[\s\S]*",
+        r"[\s\S]*current PyTorch install supports CUDA capabilities[\s\S]*sm_120[\s\S]*",
+    ]
+    for pattern in patterns:
+        warnings.filterwarnings("ignore", message=pattern, category=UserWarning)
+
+
+_ignore_known_cuda_capability_warnings()
 
 
 def format_timestamp(seconds: float) -> str:
